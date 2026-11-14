@@ -65,9 +65,11 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           ./scripts/upstream-sync.sh
 
+      # 'unchanged' is included on purpose: the branch may still be waiting
+      # for a pull request that an earlier run was not allowed to open.
       - name: Open or refresh the pull request
         id: pr
-        if: steps.sync.outputs.status == 'ready' || steps.sync.outputs.status == 'conflict'
+        if: contains(fromJSON('["ready", "conflict", "unchanged"]'), steps.sync.outputs.status)
         env:
           STATUS: ${{ steps.sync.outputs.status }}
           UPSTREAM_SHA: ${{ steps.sync.outputs.upstream_sha }}
@@ -78,7 +80,7 @@ jobs:
           {
             echo "## Update aus dem Original"
             echo
-            echo "Stand: [\`$UPSTREAM_REPO@$UPSTREAM_SHA\`](https://github.com/$UPSTREAM_REPO/commits/$UPSTREAM_BRANCH) — $total neue Commits:"
+            echo "Stand: [\`$UPSTREAM_REPO@$UPSTREAM_SHA\`](https://github.com/$UPSTREAM_REPO/commits/$UPSTREAM_BRANCH). Neue Commits: $total"
             echo
             # Commit subjects are someone else's text: keep them inert.
             git log --no-merges --max-count=40 --format='%h %s' "origin/$BASE_BRANCH..$upstream" \
@@ -104,10 +106,24 @@ jobs:
             echo "_Automatisch erstellt von \`.github/workflows/upstream-sync.yml\`._"
           } > pr-body.md
 
+          head_sha="$(git ls-remote origin "refs/heads/$SYNC_BRANCH" | cut -f1)"
           number="$(gh pr list --head "$SYNC_BRANCH" --base "$BASE_BRANCH" --state open --json number --jq '.[0].number // empty')"
+          declined=""
+          if [ -z "$number" ] && [ "$STATUS" = unchanged ]; then
+            # Same branch state as before and no open pull request: either it
+            # could never be opened, or it was closed without merging. Only
+            # the first case should produce one now.
+            declined="$(gh pr list --head "$SYNC_BRANCH" --base "$BASE_BRANCH" --state closed --json number,headRefOid \
+              --jq "map(select(.headRefOid == \"$head_sha\")) | .[0].number // empty")"
+          fi
+
           if [ -n "$number" ]; then
-            gh pr edit "$number" --body-file pr-body.md
-            echo "Pull request #$number refreshed." >> "$GITHUB_STEP_SUMMARY"
+            if [ "$STATUS" != unchanged ]; then
+              gh pr edit "$number" --body-file pr-body.md
+            fi
+            echo "Pull request #$number is open for this update." >> "$GITHUB_STEP_SUMMARY"
+          elif [ -n "$declined" ]; then
+            echo "Pull request #$declined for this exact update was closed without merging; not opening another one." >> "$GITHUB_STEP_SUMMARY"
           elif url="$(gh pr create --head "$SYNC_BRANCH" --base "$BASE_BRANCH" \
             --title "Update aus dem Original ($UPSTREAM_SHA)" --body-file pr-body.md)"; then
             echo "Pull request opened: $url" >> "$GITHUB_STEP_SUMMARY"
@@ -123,10 +139,12 @@ jobs:
           fi
 
       # Pull requests opened with the built-in token do not start other
-      # workflows, so ask for the build explicitly. A branch that still
-      # conflicts gets its checks once the conflict is resolved by hand.
+      # workflows, so ask for the build explicitly — also when opening the
+      # pull request failed, so the checks are already there once it exists.
+      # A branch that still conflicts gets its checks once the conflict is
+      # resolved by hand.
       - name: Start the APK build for the sync branch
-        if: steps.sync.outputs.status == 'ready'
+        if: ${{ !cancelled() && steps.sync.outputs.status == 'ready' }}
         run: gh workflow run android-apk.yml --ref "$SYNC_BRANCH"
 
       - name: Report
