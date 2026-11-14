@@ -14,6 +14,7 @@ Kennungen: A = Aufgabe, D = Entscheidung, I = Idee, W = Warnung. Kennungen werde
 | A4 | Nach dem Merge den ersten Release-Lauf und einen manuell gestarteten „Upstream sync“ kontrollieren | KI | `.github/workflows/` | wartet auf A1, A2 |
 | W1 | Unter Android wird die Statistik nur bei geöffneter App erfasst (keine Hintergrund-Erfassung wie unter iOS) | – | FORK.md, „Bekannte Einschränkungen“ | offen |
 | W2 | APK ist mit dem öffentlichen Debug-Schlüssel des Expo-Templates signiert | – | FORK.md, „Signatur“ | offen |
+| W3 | Das Original wird laut Repository-Beschreibung auf Codeberg gepflegt, GitHub ist ein Spiegel. Der Sync liest den GitHub-Spiegel; beide waren am 2026-11-14 identisch. Bleibt der Spiegel einmal zurück, kommen Updates verspätet an | – | FORK.md, „Updates aus dem Original“ | offen |
 | I1 | Eigener Signaturschlüssel über GitHub-Secrets (einmalige Neuinstallation nötig) | – | zu W2 | Idee |
 | I2 | Android-Vordergrunddienst, damit die Statistik auch im Hintergrund weiterläuft | – | zu W1 | Idee |
 | I3 | Ergebnisse der Gerätetests an das Original zurückmelden (dort ist Android noch nicht verifiziert) | – | Original-PR #1 | Idee |

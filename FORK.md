@@ -43,6 +43,7 @@ Jeden Montag prüft der Workflow **Upstream sync**, ob das Original neue Commits
 - Bei Konflikten mit eigenen Änderungen zeigt der PR die betroffenen Dateien; auflösen über „Resolve conflicts“ oder lokal.
 - Den Knopf „Sync fork → Discard commits“ auf der GitHub-Startseite des Forks nicht benutzen: Er verwirft die eigenen Änderungen.
 - Sofort prüfen statt bis Montag warten: Actions → Upstream sync → „Run workflow“.
+- Quelle ist das GitHub-Repository des Originals. Laut dessen Beschreibung ist es ein Spiegel von `codeberg.org/niltonheck/open-posture-companion`. Sollte der Spiegel einmal zurückbleiben, lässt sich die Quelle in `.github/workflows/upstream-sync.yml` über `UPSTREAM_URL` umstellen.
 
 Nach dem Mergen baut **Android APK** automatisch einen neuen Release.
 
