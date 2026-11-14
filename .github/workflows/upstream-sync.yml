@@ -1,0 +1,145 @@
+# Proposes updates from the original project as a pull request.
+#
+# Once a week (and on demand) this checks whether
+# niltonheck/open-posture-companion has commits that this fork's main does
+# not. If so, it merges them into a copy of main on the `upstream-sync`
+# branch and opens a pull request. Nothing is merged automatically, and the
+# fork's own changes are never overwritten — see scripts/upstream-sync.sh.
+#
+# Requirements (one-time, see FORK.md):
+#   - Actions enabled for the fork
+#   - Settings > Actions > General > "Allow GitHub Actions to create and
+#     approve pull requests"
+#
+# Optional: a SYNC_TOKEN secret (personal access token with contents,
+# pull-requests and workflows write access). Only needed once upstream adds
+# or changes files under .github/workflows/, which the built-in token is
+# not allowed to push.
+
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: '17 5 * * 1' # Mondays, 05:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+defaults:
+  run:
+    # Explicit, so every script runs with `set -eo pipefail`.
+    shell: bash
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: niltonheck/open-posture-companion
+  UPSTREAM_BRANCH: main
+  BASE_BRANCH: main
+  SYNC_BRANCH: upstream-sync
+  GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
+
+jobs:
+  sync:
+    name: Check upstream
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.BASE_BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: Merge upstream into the sync branch
+        id: sync
+        env:
+          UPSTREAM_URL: https://github.com/${{ env.UPSTREAM_REPO }}.git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          ./scripts/upstream-sync.sh
+
+      - name: Open or refresh the pull request
+        id: pr
+        if: steps.sync.outputs.status == 'ready' || steps.sync.outputs.status == 'conflict'
+        env:
+          STATUS: ${{ steps.sync.outputs.status }}
+          UPSTREAM_SHA: ${{ steps.sync.outputs.upstream_sha }}
+        run: |
+          upstream="refs/remotes/upstream-sync-source/$UPSTREAM_BRANCH"
+          total="$(git rev-list --count --no-merges "origin/$BASE_BRANCH..$upstream")"
+
+          {
+            echo "## Update aus dem Original"
+            echo
+            echo "Stand: [\`$UPSTREAM_REPO@$UPSTREAM_SHA\`](https://github.com/$UPSTREAM_REPO/commits/$UPSTREAM_BRANCH) — $total neue Commits:"
+            echo
+            # Commit subjects are someone else's text: keep them inert.
+            git log --no-merges --max-count=40 --format='%h %s' "origin/$BASE_BRANCH..$upstream" \
+              | sed -e 's/[`<>@#]/ /g' -e 's/^\([0-9a-f]*\) \(.*\)$/- `\1` \2/'
+            if [ "$total" -gt 40 ]; then
+              echo "- … und $((total - 40)) weitere"
+            fi
+            echo
+            if [ "$STATUS" = conflict ]; then
+              echo "### ⚠️ Konflikte mit eigenen Änderungen"
+              echo
+              echo "Das Update lässt sich nicht automatisch mit \`$BASE_BRANCH\` zusammenführen. Dieser Branch enthält deshalb den unveränderten Stand des Originals. Die Konflikte unten über **Resolve conflicts** (oder lokal) auflösen; danach laufen die Checks automatisch."
+              echo
+            fi
+            echo "### Vor dem Mergen"
+            echo
+            echo "- [ ] Checks sind grün (BLE-Schreibschutz, Typen, Lint, APK-Build)"
+            echo "- [ ] Änderungen unter \`src/device/\` angesehen — neue Schreibzugriffe auf das Gerät nur nach Abgleich mit dem Protokoll (siehe FORK.md, „Firmware-Sicherheit“)"
+            echo "- [ ] Bei Änderungen an der Bluetooth-Logik: APK aus dem Build dieses PRs auf dem Gerät ausprobiert"
+            echo
+            echo "**Mit „Create a merge commit“ mergen**, nicht mit Squash oder Rebase — sonst erkennt der nächste Lauf dieselben Commits erneut als neu."
+            echo
+            echo "_Automatisch erstellt von \`.github/workflows/upstream-sync.yml\`._"
+          } > pr-body.md
+
+          number="$(gh pr list --head "$SYNC_BRANCH" --base "$BASE_BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --body-file pr-body.md
+            echo "Pull request #$number refreshed." >> "$GITHUB_STEP_SUMMARY"
+          elif url="$(gh pr create --head "$SYNC_BRANCH" --base "$BASE_BRANCH" \
+            --title "Update aus dem Original ($UPSTREAM_SHA)" --body-file pr-body.md)"; then
+            echo "Pull request opened: $url" >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### Pull request could not be opened"
+              echo
+              echo "The branch \`$SYNC_BRANCH\` is ready, but this workflow is not allowed to open pull requests."
+              echo "Enable **Settings > Actions > General > Allow GitHub Actions to create and approve pull requests**, then re-run — or open it by hand:"
+              echo "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/$BASE_BRANCH...$SYNC_BRANCH?expand=1"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      # Pull requests opened with the built-in token do not start other
+      # workflows, so ask for the build explicitly. A branch that still
+      # conflicts gets its checks once the conflict is resolved by hand.
+      - name: Start the APK build for the sync branch
+        if: steps.sync.outputs.status == 'ready'
+        run: gh workflow run android-apk.yml --ref "$SYNC_BRANCH"
+
+      - name: Report
+        if: always()
+        env:
+          STATUS: ${{ steps.sync.outputs.status }}
+        run: |
+          echo "Upstream sync: ${STATUS:-failed}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$STATUS" = blocked ]; then
+            {
+              echo
+              echo "\`$SYNC_BRANCH\` holds manual changes that conflict with newer upstream commits."
+              echo "Merge the open pull request (or delete the branch); the next run picks up the rest."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
